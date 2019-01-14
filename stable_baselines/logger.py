@@ -495,7 +495,7 @@ class Logger(object):
             if isinstance(fmt, KVWriter):
                 fmt.writekvs(self.name2val)
         # backup        
-        self.history = self.name2val
+        self.history = self.name2val.copy()
 
         self.name2val.clear()
         self.name2cnt.clear()
