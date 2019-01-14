@@ -84,8 +84,6 @@ class PPO2(ActorCriticRLModel):
         self.summary = None
         self.episode_reward = None
 
-        self.logger_dict = dict()
-
         if _init_setup_model:
             self.setup_model()
 
@@ -325,8 +323,6 @@ class PPO2(ActorCriticRLModel):
                     logger.logkv('time_elapsed', t_start - t_first_start)
                     for (loss_val, loss_name) in zip(loss_vals, self.loss_names):
                         logger.logkv(loss_name, loss_val)
-                    # save the logger dict
-                    self.logger_dict = logger.getkvs()
                     logger.dumpkvs()
 
                 if callback is not None:

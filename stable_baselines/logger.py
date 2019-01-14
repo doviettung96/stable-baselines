@@ -297,6 +297,15 @@ def getkvs():
     """
     return Logger.CURRENT.name2val
 
+# get back the backup of name2val
+def gethistory():
+    """
+    get the key values logs
+
+    :return: (dict) the logged values
+    """
+    return Logger.CURRENT.history
+
 
 def log(*args, level=INFO):
     """
@@ -447,6 +456,8 @@ class Logger(object):
         self.dir = folder
         self.output_formats = output_formats
 
+        # this is a backup of the name2val
+        self.history = defaultdict(float)
     # Logging API, forwarded
     # ----------------------------------------
     def logkv(self, key, val):
@@ -483,6 +494,9 @@ class Logger(object):
         for fmt in self.output_formats:
             if isinstance(fmt, KVWriter):
                 fmt.writekvs(self.name2val)
+        # backup        
+        self.history = self.name2val
+
         self.name2val.clear()
         self.name2cnt.clear()
 
