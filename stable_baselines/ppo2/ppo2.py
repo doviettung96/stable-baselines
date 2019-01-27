@@ -84,6 +84,8 @@ class PPO2(ActorCriticRLModel):
         self.summary = None
         self.episode_reward = None
 
+        self.logstd = tf.get_variable("ppo2_model/pi/logstd") # allow us to modify the logstd
+
         if _init_setup_model:
             self.setup_model()
 
@@ -267,6 +269,11 @@ class PPO2(ActorCriticRLModel):
                 frac = 1.0 - (update - 1.0) / nupdates
                 lr_now = self.learning_rate(frac)
                 cliprangenow = self.cliprange(frac)
+
+                # change the logstd here
+                logstd_end = -1.6
+                self.sess.run(tf.assign(self.logstd, logstd_end + frac))
+
                 # true_reward is the reward without discount
                 obs, returns, masks, actions, values, neglogpacs, states, ep_infos, true_reward = runner.run()
                 ep_info_buf.extend(ep_infos)
