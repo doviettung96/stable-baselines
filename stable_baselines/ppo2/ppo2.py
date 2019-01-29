@@ -84,7 +84,7 @@ class PPO2(ActorCriticRLModel):
         self.summary = None
         self.episode_reward = None
 
-        self.logstd = tf.get_variable("ppo2_model/pi/logstd") # allow us to modify the logstd
+        self.logstd = tf.get_variable("model/pi/logstd") # allow us to modify the logstd
 
         if _init_setup_model:
             self.setup_model()
