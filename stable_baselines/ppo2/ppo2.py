@@ -271,8 +271,9 @@ class PPO2(ActorCriticRLModel):
                 # change the logstd here
                 logstd_end = -1.6
                 # train_model/model/split:1
-                with tf.variable_scope("train_model/model", reuse=True):
-                    self.logstd = tf.get_variable("pi/logstd") # allow us to modify the logstd
+                
+                #self.logstd = tf.get_variable("pi/logstd") # allow us to modify the logstd
+                self.logstd = self.act_model.proba_distribution.logstd
                 self.sess.run(tf.assign(self.logstd, (logstd_end + frac) * np.ones((1, self.env.action_space.shape[0]))))
 
                 # true_reward is the reward without discount
