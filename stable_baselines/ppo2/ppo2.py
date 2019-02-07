@@ -89,7 +89,7 @@ class PPO2(ActorCriticRLModel):
 
         # <tf.Variable 'model/pi/logstd:0' shape=(1, 17) dtype=float32_ref>
         with tf.variable_scope("model", reuse=True):
-            self.logstd = tf.get_variable(name='pi/logstd:0') # allow us to modify the logstd 
+            self.logstd = tf.get_variable(name='pi/logstd') # allow us to modify the logstd 
 
     def setup_model(self):
         with SetVerbosity(self.verbose):
