@@ -119,6 +119,7 @@ class PPO2(ActorCriticRLModel):
                                               self.n_envs // self.nminibatches, self.n_steps, n_batch_train,
                                               reuse=True)
                 
+                # this allow us to change the logstd
                 with tf.variable_scope('model', reuse=True):
                     self.logstd = tf.get_variable(name='pi/logstd')
 
