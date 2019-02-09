@@ -118,6 +118,9 @@ class PPO2(ActorCriticRLModel):
                     train_model = self.policy(self.sess, self.observation_space, self.action_space,
                                               self.n_envs // self.nminibatches, self.n_steps, n_batch_train,
                                               reuse=True)
+                
+                with tf.variable_scope('model', reuse=True):
+                    print(tf.get_variable(name='pi/logstd'))
 
                 with tf.variable_scope("loss", reuse=False):
                     self.action_ph = train_model.pdtype.sample_placeholder([None], name="action_ph")
@@ -269,8 +272,7 @@ class PPO2(ActorCriticRLModel):
                 cliprangenow = self.cliprange(frac)
 
                 # change the logstd here
-                with tf.variable_scope('model', reuse=True):
-                    print(tf.get_variable(name='pi/logstd'))
+                
                 #logstd_end = -1.6
                 #self.sess.run(tf.assign(self.logstd, (logstd_end + frac) * np.ones((1, self.env.action_space.shape[0]))))
 
