@@ -2,14 +2,14 @@ import os
 
 import pytest
 
-from stable_baselines import A2C, ACER, PPO2
+from stable_baselines import A2C, ACER, ACKTR, PPO2
 from stable_baselines.common.policies import MlpLstmPolicy, LstmPolicy
 
 
 class CustomLSTMPolicy1(LstmPolicy):
     def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, n_lstm=128, reuse=False, **_kwargs):
         super().__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, n_lstm, reuse, net_arch=[8, 'lstm', 8],
-                                            layer_norm=False, feature_extraction="mlp", **_kwargs)
+                         layer_norm=False, feature_extraction="mlp", **_kwargs)
 
 
 class CustomLSTMPolicy2(LstmPolicy):
@@ -33,7 +33,7 @@ class CustomLSTMPolicy4(LstmPolicy):
 
 N_TRIALS = 100
 
-MODELS = [A2C, ACER, PPO2]
+MODELS = [A2C, ACER, ACKTR, PPO2]
 LSTM_POLICIES = [MlpLstmPolicy, CustomLSTMPolicy1, CustomLSTMPolicy2, CustomLSTMPolicy3, CustomLSTMPolicy4]
 
 
@@ -58,7 +58,7 @@ def test_lstm_policy(model_class, policy):
         model.save("./test_model")
         del model, env
         # loading
-        model = model_class.load("./test_model", policy=policy)
+        _ = model_class.load("./test_model", policy=policy)
 
     finally:
         if os.path.exists("./test_model"):

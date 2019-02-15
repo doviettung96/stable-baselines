@@ -26,7 +26,7 @@ class BaseRLModel(ABC):
     :param policy_base: (BasePolicy) the base policy used by this method
     """
 
-    def __init__(self, policy, env, verbose=0, *, requires_vec_env, policy_base):
+    def __init__(self, policy, env, verbose=0, *, requires_vec_env, policy_base, policy_kwargs=None):
         if isinstance(policy, str):
             self.policy = get_policy_from_name(policy_base, policy)
         else:
@@ -34,10 +34,12 @@ class BaseRLModel(ABC):
         self.env = env
         self.verbose = verbose
         self._requires_vec_env = requires_vec_env
+        self.policy_kwargs = {} if policy_kwargs is None else policy_kwargs
         self.observation_space = None
         self.action_space = None
         self.n_envs = None
         self._vectorize_action = False
+        self.num_timesteps = 0
 
         if env is not None:
             if isinstance(env, str):
@@ -114,6 +116,21 @@ class BaseRLModel(ABC):
 
         self.env = env
 
+    def _init_num_timesteps(self, reset_num_timesteps=True):
+        """
+        Initialize and resets num_timesteps (total timesteps since beginning of training)
+        if needed. Mainly used logging and plotting (tensorboard).
+
+        :param reset_num_timesteps: (bool) Set it to false when continuing training
+            to not create new plotting curves in tensorboard.
+        :return: (bool) Whether a new tensorboard log needs to be created
+        """
+        if reset_num_timesteps:
+            self.num_timesteps = 0
+
+        new_tb_log = self.num_timesteps == 0
+        return new_tb_log
+
     @abstractmethod
     def setup_model(self):
         """
@@ -134,7 +151,8 @@ class BaseRLModel(ABC):
             set_global_seeds(seed)
 
     @abstractmethod
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="run"):
+    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="run",
+              reset_num_timesteps=True):
         """
         Return a trained model.
 
@@ -144,6 +162,7 @@ class BaseRLModel(ABC):
             It takes the local and global variables. If it returns False, training is aborted.
         :param log_interval: (int) The number of timesteps before logging.
         :param tb_log_name: (str) the name of the run for tensorboard log
+        :param reset_num_timesteps: (bool) whether or not to reset the current timestep number (used in logging)
         :return: (BaseRLModel) the trained model
         """
         pass
@@ -317,9 +336,9 @@ class ActorCriticRLModel(BaseRLModel):
     """
 
     def __init__(self, policy, env, _init_setup_model, verbose=0, policy_base=ActorCriticPolicy,
-                 requires_vec_env=False):
+                 requires_vec_env=False, policy_kwargs=None):
         super(ActorCriticRLModel, self).__init__(policy, env, verbose=verbose, requires_vec_env=requires_vec_env,
-                                                 policy_base=policy_base)
+                                                 policy_base=policy_base, policy_kwargs=policy_kwargs)
 
         self.sess = None
         self.initial_state = None
@@ -332,7 +351,8 @@ class ActorCriticRLModel(BaseRLModel):
         pass
 
     @abstractmethod
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="run"):
+    def learn(self, total_timesteps, callback=None, seed=None,
+              log_interval=100, tb_log_name="run", reset_num_timesteps=True):
         pass
 
     def predict(self, observation, state=None, mask=None, deterministic=False):
@@ -424,6 +444,11 @@ class ActorCriticRLModel(BaseRLModel):
     def load(cls, load_path, env=None, **kwargs):
         data, params = cls._load_from_file(load_path)
 
+        if 'policy_kwargs' in kwargs and kwargs['policy_kwargs'] != data['policy_kwargs']:
+            raise ValueError("The specified policy kwargs do not equal the stored policy kwargs. "
+                             "Stored kwargs: {}, specified kwargs: {}".format(data['policy_kwargs'],
+                                                                              kwargs['policy_kwargs']))
+
         model = cls(policy=data["policy"], env=None, _init_setup_model=False)
         model.__dict__.update(data)
         model.__dict__.update(kwargs)
@@ -451,9 +476,9 @@ class OffPolicyRLModel(BaseRLModel):
     :param policy_base: (BasePolicy) the base policy used by this method
     """
 
-    def __init__(self, policy, env, replay_buffer, verbose=0, *, requires_vec_env, policy_base):
+    def __init__(self, policy, env, replay_buffer, verbose=0, *, requires_vec_env, policy_base, policy_kwargs=None):
         super(OffPolicyRLModel, self).__init__(policy, env, verbose=verbose, requires_vec_env=requires_vec_env,
-                                               policy_base=policy_base)
+                                               policy_base=policy_base, policy_kwargs=policy_kwargs)
 
         self.replay_buffer = replay_buffer
 
@@ -462,7 +487,8 @@ class OffPolicyRLModel(BaseRLModel):
         pass
 
     @abstractmethod
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="run"):
+    def learn(self, total_timesteps, callback=None, seed=None,
+              log_interval=100, tb_log_name="run", reset_num_timesteps=True):
         pass
 
     @abstractmethod
@@ -538,23 +564,27 @@ class SetVerbosity:
 
 
 class TensorboardWriter:
-    def __init__(self, graph, tensorboard_log_path, tb_log_name):
+    def __init__(self, graph, tensorboard_log_path, tb_log_name, new_tb_log=True):
         """
         Create a Tensorboard writer for a code segment, and saves it to the log directory as its own run
 
         :param graph: (Tensorflow Graph) the model graph
         :param tensorboard_log_path: (str) the save path for the log (can be None for no logging)
         :param tb_log_name: (str) the name of the run for tensorboard log
+        :param new_tb_log: (bool) whether or not to create a new logging folder for tensorbaord
         """
         self.graph = graph
         self.tensorboard_log_path = tensorboard_log_path
         self.tb_log_name = tb_log_name
         self.writer = None
+        self.new_tb_log = new_tb_log
 
     def __enter__(self):
         if self.tensorboard_log_path is not None:
-            save_path = os.path.join(self.tensorboard_log_path,
-                                     "{}_{}".format(self.tb_log_name, self._get_latest_run_id() + 1))
+            latest_run_id = self._get_latest_run_id()
+            if self.new_tb_log:
+                latest_run_id = latest_run_id + 1
+            save_path = os.path.join(self.tensorboard_log_path, "{}_{}".format(self.tb_log_name, latest_run_id))
             self.writer = tf.summary.FileWriter(save_path, graph=self.graph)
         return self.writer
 
