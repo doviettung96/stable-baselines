@@ -7,7 +7,7 @@ import warnings
 import numpy as np
 import tensorflow as tf
 
-from stable_baselines.a2c.utils import find_trainable_variables, total_episode_reward_logger
+from stable_baselines.a2c.utils import total_episode_reward_logger
 from stable_baselines.common import tf_util, OffPolicyRLModel, SetVerbosity, TensorboardWriter
 from stable_baselines.common.vec_env import VecEnv
 from stable_baselines.deepq.replay_buffer import ReplayBuffer
@@ -53,6 +53,11 @@ class SAC(OffPolicyRLModel):
     :param target_update_interval: (int) update the target network every `target_network_update_freq` steps.
     :param gradient_steps: (int) How many gradient update after each step
     :param target_entropy: (str or float) target entropy when learning ent_coef (ent_coef = 'auto')
+    :param action_noise: (ActionNoise) the action noise type (None by default), this can help
+        for hard exploration problem. Cf DDPG for the different action noise type.
+    :param random_exploration: (float) Probability of taking a random action (as in an epsilon-greedy strategy)
+        This is not needed for SAC normally but can help exploring when using HER + SAC.
+        This hack was present in the original OpenAI Baselines repo (DDPG + HER)
     :param verbose: (int) the verbosity level: 0 none, 1 training information, 2 tensorflow debug
     :param tensorboard_log: (str) the log location for tensorboard (if None, no logging)
     :param _init_setup_model: (bool) Whether or not to build the network at the creation of the instance
@@ -64,7 +69,8 @@ class SAC(OffPolicyRLModel):
     def __init__(self, policy, env, gamma=0.99, learning_rate=3e-4, buffer_size=50000,
                  learning_starts=100, train_freq=1, batch_size=64,
                  tau=0.005, ent_coef='auto', target_update_interval=1,
-                 gradient_steps=1, target_entropy='auto', verbose=0, tensorboard_log=None,
+                 gradient_steps=1, target_entropy='auto', action_noise=None,
+                 random_exploration=0.0, verbose=0, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False):
 
         super(SAC, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose,
@@ -86,6 +92,8 @@ class SAC(OffPolicyRLModel):
         self.target_update_interval = target_update_interval
         self.gradient_steps = gradient_steps
         self.gamma = gamma
+        self.action_noise = action_noise
+        self.random_exploration = random_exploration
 
         self.value_fn = None
         self.graph = None
@@ -121,6 +129,12 @@ class SAC(OffPolicyRLModel):
 
         if _init_setup_model:
             self.setup_model()
+
+    def _get_pretrain_placeholders(self):
+        policy = self.policy_tf
+        # Rescale
+        deterministic_action = self.deterministic_action * np.abs(self.action_space.low)
+        return policy.obs_ph, self.actions_ph, deterministic_action
 
     def setup_model(self):
         with SetVerbosity(self.verbose):
@@ -158,7 +172,7 @@ class SAC(OffPolicyRLModel):
                     # first return value corresponds to deterministic actions
                     # policy_out corresponds to stochastic actions, used for training
                     # logp_pi is the log probabilty of actions taken by the policy
-                    _, policy_out, logp_pi = self.policy_tf.make_actor(self.processed_obs_ph)
+                    self.deterministic_action, policy_out, logp_pi = self.policy_tf.make_actor(self.processed_obs_ph)
                     # Monitor the entropy of the policy,
                     # this is not used for training
                     self.entropy = tf.reduce_mean(self.policy_tf.entropy)
@@ -297,8 +311,8 @@ class SAC(OffPolicyRLModel):
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
 
                 # Retrieve parameters that must be saved
-                self.params = find_trainable_variables("model")
-                self.target_params = find_trainable_variables("target/values_fn/vf")
+                self.params = get_vars("model")
+                self.target_params = get_vars("target/values_fn/vf")
 
                 # Initialize Variables and target network
                 with self.sess.as_default():
@@ -346,9 +360,12 @@ class SAC(OffPolicyRLModel):
         return policy_loss, qf1_loss, qf2_loss, value_loss, entropy
 
     def learn(self, total_timesteps, callback=None, seed=None,
-              log_interval=4, tb_log_name="SAC", reset_num_timesteps=True):
+              log_interval=4, tb_log_name="SAC", reset_num_timesteps=True, replay_wrapper=None):
 
         new_tb_log = self._init_num_timesteps(reset_num_timesteps)
+
+        if replay_wrapper is not None:
+            self.replay_buffer = replay_wrapper(self.replay_buffer)
 
         with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
                 as writer:
@@ -362,6 +379,9 @@ class SAC(OffPolicyRLModel):
 
             start_time = time.time()
             episode_rewards = [0.0]
+            episode_successes = []
+            if self.action_noise is not None:
+                self.action_noise.reset()
             obs = self.env.reset()
             self.episode_reward = np.zeros((1,))
             ep_info_buf = deque(maxlen=100)
@@ -377,13 +397,18 @@ class SAC(OffPolicyRLModel):
 
                 # Before training starts, randomly sample actions
                 # from a uniform distribution for better exploration.
-                # Afterwards, use the learned policy.
-                if self.num_timesteps < self.learning_starts:
-                    action = self.env.action_space.sample()
+                # Afterwards, use the learned policy
+                # if random_exploration is set to 0 (normal setting)
+                if (self.num_timesteps < self.learning_starts
+                    or np.random.rand() < self.random_exploration):
                     # No need to rescale when sampling random action
-                    rescaled_action = action
+                    rescaled_action = action = self.env.action_space.sample()
                 else:
                     action = self.policy_tf.step(obs[None], deterministic=False).flatten()
+                    # Add noise to the action (improve exploration,
+                    # not needed in general)
+                    if self.action_noise is not None:
+                        action = np.clip(action + self.action_noise(), -1, 1)
                     # Rescale from [-1, 1] to the correct bounds
                     rescaled_action = action * np.abs(self.action_space.low)
 
@@ -411,7 +436,10 @@ class SAC(OffPolicyRLModel):
                     mb_infos_vals = []
                     # Update policy, critics and target networks
                     for grad_step in range(self.gradient_steps):
-                        if self.num_timesteps < self.batch_size or self.num_timesteps < self.learning_starts:
+                        # Break if the warmup phase is not over
+                        # or if there are not enough samples in the replay buffer
+                        if not self.replay_buffer.can_sample(self.batch_size) \
+                           or self.num_timesteps < self.learning_starts:
                             break
                         n_updates += 1
                         # Compute current learning_rate
@@ -429,9 +457,15 @@ class SAC(OffPolicyRLModel):
 
                 episode_rewards[-1] += reward
                 if done:
+                    if self.action_noise is not None:
+                        self.action_noise.reset()
                     if not isinstance(self.env, VecEnv):
                         obs = self.env.reset()
                     episode_rewards.append(0.0)
+
+                    maybe_is_success = info.get('is_success')
+                    if maybe_is_success is not None:
+                        episode_successes.append(float(maybe_is_success))
 
                 if len(episode_rewards[-101:-1]) == 0:
                     mean_reward = -np.inf
@@ -445,12 +479,15 @@ class SAC(OffPolicyRLModel):
                     fps = int(step / (time.time() - start_time))
                     logger.logkv("episodes", num_episodes)
                     logger.logkv("mean 100 episode reward", mean_reward)
-                    logger.logkv('ep_rewmean', safe_mean([ep_info['r'] for ep_info in ep_info_buf]))
-                    logger.logkv('eplenmean', safe_mean([ep_info['l'] for ep_info in ep_info_buf]))
+                    if len(ep_info_buf) > 0 and len(ep_info_buf[0]) > 0:
+                        logger.logkv('ep_rewmean', safe_mean([ep_info['r'] for ep_info in ep_info_buf]))
+                        logger.logkv('eplenmean', safe_mean([ep_info['l'] for ep_info in ep_info_buf]))
                     logger.logkv("n_updates", n_updates)
                     logger.logkv("current_lr", current_lr)
                     logger.logkv("fps", fps)
                     logger.logkv('time_elapsed', int(time.time() - start_time))
+                    if len(episode_successes) > 0:
+                        logger.logkv("success rate", np.mean(episode_successes[-100:]))
                     if len(infos_values) > 0:
                         for (name, val) in zip(self.infos_names, infos_values):
                             logger.logkv(name, val)
@@ -488,6 +525,10 @@ class SAC(OffPolicyRLModel):
 
         return actions, None
 
+    def get_parameter_list(self):
+        return (self.params +
+                self.target_params)
+
     def save(self, save_path):
         data = {
             "learning_rate": self.learning_rate,
@@ -508,14 +549,15 @@ class SAC(OffPolicyRLModel):
             "action_space": self.action_space,
             "policy": self.policy,
             "n_envs": self.n_envs,
+            "action_noise": self.action_noise,
+            "random_exploration": self.random_exploration,
             "_vectorize_action": self._vectorize_action,
             "policy_kwargs": self.policy_kwargs
         }
 
-        params = self.sess.run(self.params)
-        target_params = self.sess.run(self.target_params)
+        params_to_save = self.get_parameters()
 
-        self._save_to_file(save_path, data=data, params=params + target_params)
+        self._save_to_file(save_path, data=data, params=params_to_save)
 
     @classmethod
     def load(cls, load_path, env=None, **kwargs):
@@ -532,9 +574,6 @@ class SAC(OffPolicyRLModel):
         model.set_env(env)
         model.setup_model()
 
-        restores = []
-        for param, loaded_p in zip(model.params + model.target_params, params):
-            restores.append(param.assign(loaded_p))
-        model.sess.run(restores)
+        model.load_parameters(params)
 
         return model
