@@ -109,6 +109,8 @@ class A2C(ActorCriticRLModel):
                                        custom_getter=tf_util.outer_scope_getter("train_model")):
                     train_model = self.policy(self.sess, self.observation_space, self.action_space, self.n_envs,
                                               self.n_steps, n_batch_train, reuse=True, **self.policy_kwargs)
+                with tf.variable_scope('model', reuse=True):
+                    self.logstd = tf.get_variable(name='pi/logstd')
 
                 with tf.variable_scope("loss", reuse=False):
                     self.actions_ph = train_model.pdtype.sample_placeholder([None], name="action_ph")
@@ -222,7 +224,13 @@ class A2C(ActorCriticRLModel):
             self.episode_reward = np.zeros((self.n_envs,))
 
             t_start = time.time()
-            for update in range(1, total_timesteps // self.n_batch + 1):
+            nupdates = total_timesteps // self.n_batch
+            for update in range(1, nupdates + 1):
+                # change the logstd here
+                frac = 1.0 - (update - 1.0) / nupdates
+                logstd_end = -1.6
+                self.sess.run(tf.assign(self.logstd, (logstd_end + frac) * np.ones((1, self.env.action_space.shape[0]))))
+
                 # true_reward is the reward without discount
                 obs, states, rewards, masks, actions, values, true_reward = runner.run()
                 _, value_loss, policy_entropy = self._train_step(obs, states, rewards, masks, actions, values,
