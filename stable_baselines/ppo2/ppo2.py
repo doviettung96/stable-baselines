@@ -332,12 +332,12 @@ class PPO2(ActorCriticRLModel):
                 frac = 1.0 - (update - 1.0) / n_updates
                 lr_now = self.learning_rate(frac)
 
-                cliprangenow = self.cliprange(frac)
+                cliprange_now = self.cliprange(frac)
                 cliprange_vf_now = cliprange_vf(frac)
                 
                 # change the logstd here
-                logstd_end = -1.6
-                self.sess.run(tf.assign(self.logstd, (logstd_end + frac) * np.ones((1, self.env.action_space.shape[0]))))
+                # logstd_end = -1.6
+                # self.sess.run(tf.assign(self.logstd, (logstd_end + frac) * np.ones((1, self.env.action_space.shape[0]))))
 
                 # true_reward is the reward without discount
                 obs, returns, masks, actions, values, neglogpacs, states, ep_infos, true_reward = runner.run()
